@@ -62,7 +62,6 @@ class BuildRunner(object):
         self.success_list = []
 
     def build(self, cmd):
-        print cmd
         cmd_targets = cmd.targets
         uc = cmd.uc
         for tg in cmd_targets:
