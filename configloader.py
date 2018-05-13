@@ -3,9 +3,11 @@ from core.configparser import ConfigLoader
 
 
 class VSConfigLoader(ConfigLoader):
+    allow_command = ['make', 'ant', 'ant.bat', 'mvn', 'mvn.cmd', 'gradle', 'gradle.bat']
 
     def __init__(self, cf=os.path.join('config', 'buildConfig.ini')):
         super(VSConfigLoader, self).__init__(cf)
+        self.config_sig = os.path.getmtime(cf)
         self.cmdDict = self.__resolve_command()
 
     def get_root_path(self):
@@ -22,27 +24,52 @@ class VSConfigLoader(ConfigLoader):
         return {tup[0]: tup[1].split(',') for tup in ctlist}
 
     def __resolve_command(self):
-        # do not allow users to pass any command
-        ant_home = os.getenv('ANT_HOME', self.config.get('default', 'ant-home'))
-        maven_home = os.getenv('MAVEN_HOME', self.config.get('default', 'maven-home'))
-        gradle_home = os.getenv('GRADLE_HOME', self.config.get('default', 'gradle-home'))
+        try:
+            last_sig = 0
+            signature_file = os.path.join('config', 'signature')
+            with open(signature_file, 'rb') as f:
+                last_sig = int(f.read())
 
-        antC = os.path.join(ant_home, 'bin', 'ant')
-        mvnC = os.path.join(maven_home, 'bin', 'mvn')
-        gradleC = os.path.join(gradle_home, 'bin', 'gradle')
-        if os.name == 'nt':
-            antC += '.bat'
-            mvnC += '.cmd'
-            gradleC += '.bat'
+            if self.config_sig != last_sig:
+                self.__build_cmd_dict()
+                self.__dump_signature(signature_file)
+        except IOError:
+            self.__build_cmd_dict()
+            self.__dump_signature(signature_file)
 
-        result = {
-            'make': '',
-            'ant': antC,
-            'mvn': mvnC,
-            'gradle': gradleC
-        }
+        from config import cmds
+        return cmds.cmds
 
-        return result
+    def __dump_signature(self, sig_file):
+        with open(sig_file, 'wb') as f:
+            f.write(str(self.config_sig))
+
+    def __build_cmd_dict(self):
+        from core import cmdresolver
+        environments = ['ANT_HOME', 'MAVEN_HOME', 'GRADLE_HOME', 'PATH']
+        paths = [self.config.get('default', 'ant-home'),
+                 self.config.get('default', 'maven-home'),
+                 self.config.get('default', 'gradle-home')]
+        cr = cmdresolver.CmdResolver(envs=environments, paths=paths)
+        cr.dump()
 
     def get_command(self, cmd):
-        return self.cmdDict.get(cmd, '')
+        if cmd in self.allow_command:
+            if str(cmd).rfind(os.extsep) == -1:
+                # commands don't have extension
+                return self.__handle_command_on_different_os(cmd) or ''
+
+    def __handle_command_on_different_os(self, cmd):
+        if 'nt' in os.name:
+            cmd2find = [cmd + ext for ext in ['.exe', '.cmd', '.bat']]
+            for c in cmd2find:
+                retC = self.__find_command(c)
+                if retC:
+                    return retC
+        elif 'posix' in os.name:
+            return self.__find_command(cmd)
+
+    def __find_command(self, cmd):
+        for key, vlist in self.cmdDict.iteritems():
+            if cmd in vlist:
+                return os.path.join(key, cmd)
